@@ -422,6 +422,156 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
+    main()"Your cookies will be saved and used for future downloads."
+    )
+    await update.message.reply_text(instructions, parse_mode='Markdown')
+
+async def cookies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Send me your cookies file in **Netscape format** as a text file or paste the content.\n\n"
+        "You can export cookies using **Cookie-Editor** extension (Netscape format)."
+    )
+    context.user_data['awaiting_cookies'] = True
+
+async def testcookies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if cookies_valid():
+        await update.message.reply_text("✅ Cookies are valid and working.")
+    else:
+        await update.message.reply_text("❌ Cookies are invalid or missing. Use /login to refresh.")
+
+async def clearcookies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if os.path.exists(COOKIE_FILE):
+        os.remove(COOKIE_FILE)
+        await update.message.reply_text("🗑️ Cookies removed. Now using no cookies.")
+    else:
+        await update.message.reply_text("No cookies file found.")
+
+async def handle_cookie_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get('awaiting_cookies'):
+        return
+    if update.message.document:
+        file = await update.message.document.get_file()
+        await file.download_to_drive(COOKIE_FILE)
+        await update.message.reply_text("✅ Cookies saved. Use /testcookies to verify.")
+    elif update.message.text:
+        content = update.message.text
+        with open(COOKIE_FILE, 'w') as f:
+            f.write(content)
+        await update.message.reply_text("✅ Cookies saved. Use /testcookies to verify.")
+    else:
+        await update.message.reply_text("Please send a text file or paste the cookie content.")
+    context.user_data['awaiting_cookies'] = False
+
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text
+    if 'youtube.com' not in url and 'youtu.be' not in url:
+        await update.message.reply_text("❌ Please send a valid YouTube link")
+        return
+    
+    status = await update.message.reply_text("🔍 Fetching available formats...")
+    
+    formats = get_available_formats(url, use_cookies=cookies_valid())
+    if not formats:
+        formats = get_available_formats(url, use_cookies=False)
+    
+    if formats:
+        keyboard = []
+        for f in formats[:10]:
+            label = f"{f['height']}p ({f['ext']})"
+            if f['has_audio']:
+                label += " 🔊"
+            else:
+                label += " (video only)"
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"{url}|{f['format_id']}")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await status.edit_text("Select a format:", reply_markup=reply_markup)
+        context.user_data['original_url'] = url
+    else:
+        await status.edit_text("⚠️ Could not fetch formats. Downloading with best quality...")
+        try:
+            video_path, title, description, uploader, tags, views, likes, duration = download_video_with_format(url, 'best', use_cookies=False)
+            await status.edit_text("✅ Downloaded!\n✂️ Creating clips...")
+            clips = make_clips(video_path, clip_duration=30)
+            await status.edit_text(f"🎬 Created {len(clips)} clips. Processing...")
+            for i, clip in enumerate(clips):
+                final_path = clip.replace('.mp4', '_final.mp4')
+                process_clip(clip, final_path, title)
+                caption = generate_caption(title, description, uploader, tags, views, likes, i+1, len(clips))
+                with open(final_path, 'rb') as f:
+                    await update.message.reply_video(video=f, caption=caption, supports_streaming=True)
+                os.remove(clip)
+                if os.path.exists(final_path):
+                    os.remove(final_path)
+            os.remove(video_path)
+            await status.delete()
+        except Exception as e:
+            await status.edit_text(f"❌ Download failed: {str(e)}")
+
+async def format_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data.split('|')
+    if len(data) != 2:
+        await query.edit_message_text("❌ Invalid format selection.")
+        return
+    url, format_id = data[0], data[1]
+    
+    await query.edit_message_text(f"⏳ Downloading video with format {format_id}...")
+    try:
+        use_cookies = cookies_valid()
+        video_path, title, description, uploader, tags, views, likes, duration = download_video_with_format(url, format_id, use_cookies=use_cookies)
+        await query.edit_message_text("✅ Downloaded!\n✂️ Creating clips...")
+        clips = make_clips(video_path, clip_duration=30)
+        await query.edit_message_text(f"🎬 Created {len(clips)} clips. Processing...")
+        for i, clip in enumerate(clips):
+            final_path = clip.replace('.mp4', '_final.mp4')
+            process_clip(clip, final_path, title)
+            caption = generate_caption(title, description, uploader, tags, views, likes, i+1, len(clips))
+            with open(final_path, 'rb') as f:
+                await query.message.reply_video(video=f, caption=caption, supports_streaming=True)
+            os.remove(clip)
+            if os.path.exists(final_path):
+                os.remove(final_path)
+        os.remove(video_path)
+        await query.edit_message_text("✅ All done! Sent all parts.")
+    except Exception as e:
+        if "Sign in to confirm" in str(e) or "HTTP Error 400" in str(e):
+            await query.edit_message_text("⚠️ Cookies may be expired. Retrying without cookies...")
+            try:
+                video_path2, title2, description2, uploader2, tags2, views2, likes2, duration2 = download_video_with_format(url, format_id, use_cookies=False)
+                await query.edit_message_text("✅ Downloaded!\n✂️ Creating clips...")
+                clips2 = make_clips(video_path2, clip_duration=30)
+                await query.edit_message_text(f"🎬 Created {len(clips2)} clips. Processing...")
+                for i, clip in enumerate(clips2):
+                    final_path2 = clip.replace('.mp4', '_final.mp4')
+                    process_clip(clip, final_path2, title2)
+                    caption2 = generate_caption(title2, description2, uploader2, tags2, views2, likes2, i+1, len(clips2))
+                    with open(final_path2, 'rb') as f:
+                        await query.message.reply_video(video=f, caption=caption2, supports_streaming=True)
+                    os.remove(clip)
+                    if os.path.exists(final_path2):
+                        os.remove(final_path2)
+                os.remove(video_path2)
+                await query.edit_message_text("✅ All done! Sent all parts.")
+            except Exception as e2:
+                await query.edit_message_text(f"❌ Error: {str(e2)}")
+        else:
+            await query.edit_message_text(f"❌ Error: {str(e)}")
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("login", login_command))
+    app.add_handler(CommandHandler("cookies", cookies_command))
+    app.add_handler(CommandHandler("testcookies", testcookies_command))
+    app.add_handler(CommandHandler("clearcookies", clearcookies_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_cookie_upload))
+    app.add_handler(CallbackQueryHandler(format_callback))
+    print("🤖 Enhanced video bot with /login guide is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
     main()    if use_cookies and os.path.exists(COOKIE_FILE):
         ydl_opts['cookiefile'] = COOKIE_FILE
     try:
