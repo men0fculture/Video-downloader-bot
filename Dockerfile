@@ -10,7 +10,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download Vosk model (Hindi)
+# Download Vosk Hindi model (small)
 RUN wget https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip && \
     unzip vosk-model-small-hi-0.22.zip -d /tmp/ && \
     rm vosk-model-small-hi-0.22.zip
