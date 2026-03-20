@@ -17,4 +17,4 @@ RUN wget https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip && \
 
 COPY . .
 
-CMD ["python", "bot.py"]]
+CMD ["python", "bot.py"]
